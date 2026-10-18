@@ -1,0 +1,23 @@
+
+services:
+  - type: web
+    name: listing-migrator
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: FLASK_SECRET_KEY
+        generateValue: true
+      - key: AWS_REGION
+        value: ap-south-1
+      - key: S3_BUCKET
+        value: property-images-estatex-1
+      - key: S3_PREFIX
+        value: migrated-listings
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
