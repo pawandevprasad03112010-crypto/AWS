@@ -581,3 +581,130 @@ def transform_listing(source, schema_config=None):
     set_path(output, amenities_target, amenities)
 
     return output
+def migrate_images(
+    listing,
+    s3_client,
+    bucket,
+    prefix="migrated-listings",
+    public_base_url="",
+):
+    """Nested JSON में image URLs खोजकर S3 पर अपलोड करें।"""
+
+    import hashlib
+    import mimetypes
+    from urllib.parse import urlparse, unquote
+
+    import requests
+
+    warnings = []
+    seen_urls = {}
+    prefix = prefix.strip("/")
+
+    def upload_image(url):
+        if url in seen_urls:
+            return seen_urls[url]
+
+        try:
+            parsed = urlparse(url)
+
+            if parsed.scheme not in ("http", "https"):
+                warnings.append(f"Unsupported image URL: {url}")
+                return url
+
+            response = requests.get(
+                url,
+                timeout=30,
+                headers={"User-Agent": "ListingImageMigrator/1.0"},
+                stream=True,
+            )
+            response.raise_for_status()
+
+            content_type = response.headers.get(
+                "Content-Type", ""
+            ).split(";")[0].strip().lower()
+
+            if not content_type.startswith("image/"):
+                warnings.append(f"URL did not return an image: {url}")
+                response.close()
+                return url
+
+            image_data = response.content
+            response.close()
+
+            if not image_data:
+                warnings.append(f"Empty image response: {url}")
+                return url
+
+            digest = hashlib.sha256(
+                image_data
+            ).hexdigest()
+
+            extension = mimetypes.guess_extension(
+                content_type
+            ) or ".img"
+
+            key = f"{prefix}/{digest}{extension}"
+
+            s3_client.put_object(
+                Bucket=bucket,
+                Key=key,
+                Body=image_data,
+                ContentType=content_type,
+            )
+
+            if public_base_url:
+                new_url = (
+                    f"{public_base_url.rstrip('/')}/{key}"
+                )
+            else:
+                region = s3_client.meta.region_name or "ap-south-1"
+                new_url = (
+                    f"https://{bucket}.s3.{region}.amazonaws.com/{key}"
+                )
+
+            seen_urls[url] = new_url
+            return new_url
+
+        except Exception as exc:
+            warnings.append(
+                f"Image migration failed for {url}: {exc}"
+            )
+            return url
+
+    def walk(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if isinstance(item, str) and item.startswith(
+                    ("http://", "https://")
+                ):
+                    key_lower = key.lower()
+
+                    if any(
+                        word in key_lower
+                        for word in (
+                            "image",
+                            "photo",
+                            "picture",
+                            "thumbnail",
+                            "gallery",
+                            "media",
+                        )
+                    ):
+                        value[key] = upload_image(item)
+
+                elif isinstance(item, (dict, list)):
+                    walk(item)
+
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                if isinstance(item, str) and item.startswith(
+                    ("http://", "https://")
+                ):
+                    value[index] = upload_image(item)
+
+                elif isinstance(item, (dict, list)):
+                    walk(item)
+
+    walk(listing)
+
+    return listing, warnings
