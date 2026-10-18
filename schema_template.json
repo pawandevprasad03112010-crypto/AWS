@@ -1,6 +1,96 @@
-
 {
-  "template": {},
+  "template": {
+    "record_type": "property_listing",
+    "entity": {
+      "title": "",
+      "description": ""
+    },
+    "listing": {
+      "title": "",
+      "description": "",
+      "market": "residential",
+      "registered_display": ""
+    },
+    "pricing": {
+      "display_price": "",
+      "price_in_words": "",
+      "min_price": null,
+      "max_price": null,
+      "average_price": null,
+      "price_per_unit_area": null,
+      "price_sqft": null,
+      "currency": "INR",
+      "brokerage": 0,
+      "show_bsp": true
+    },
+    "property": {
+      "bedrooms": null,
+      "bathrooms": null,
+      "balconies": null,
+      "furnishing": "",
+      "floor_number": "",
+      "floor_numbers": [],
+      "total_floors": null,
+      "property_age": "",
+      "ownership_type": "",
+      "reserved_parking": {
+        "covered": 0
+      },
+      "area": {
+        "display_area": "",
+        "secondary_area": "",
+        "carpet_area": ""
+      }
+    },
+    "location": {
+      "city": "",
+      "locality": "",
+      "locality_without_city": "",
+      "locality_name": "",
+      "building_name": "",
+      "society_name": "",
+      "coordinates": {
+        "latitude": null,
+        "longitude": null,
+        "zoom_level": 14,
+        "source": ""
+      },
+      "landmarks": []
+    },
+    "media": {
+      "images": []
+    },
+    "contact_details": {
+      "contact_name": "",
+      "company_name": "",
+      "phone_number": "",
+      "dealer_photo_url": "",
+      "class_label": "",
+      "profile": {
+        "contact_name": "",
+        "contact_company_name": "",
+        "phone_number": "",
+        "photo_url": "",
+        "super": {
+          "contact_company_name": "",
+          "photo_url": ""
+        }
+      }
+    },
+    "amenities": [],
+    "attributes": {
+      "tags_and_signals": {
+        "property_tags": [],
+        "tags": [],
+        "top_usps": []
+      },
+      "compliance": {
+        "registration_status": "",
+        "rera_registration_id": "",
+        "project_rera_registration_id": ""
+      }
+    }
+  },
   "field_map": {},
   "amenities_target": "amenities"
 }
