@@ -385,3 +385,199 @@ if __name__ == "__main__":
         port=port,
         debug=False,
       )
+def extract_listings(data):
+    """JSON डेटा से listings की सूची निकालें।"""
+
+    if isinstance(data, list):
+        if not all(isinstance(item, dict) for item in data):
+            raise ValueError("हर listing एक JSON object होनी चाहिए।")
+        return data
+
+    if isinstance(data, dict):
+        for key in (
+            "listings",
+            "items",
+            "data",
+            "results",
+            "properties",
+            "records",
+        ):
+            value = data.get(key)
+
+            if isinstance(value, list):
+                if not all(isinstance(item, dict) for item in value):
+                    raise ValueError(
+                        f"'{key}' में हर listing JSON object होनी चाहिए।"
+                    )
+                return value
+
+        return [data]
+
+    raise ValueError("JSON का प्रारूप सही नहीं है।")
+
+
+def get_path(data, path):
+    """Nested JSON से dotted path का value निकालें।"""
+
+    current = data
+
+    for part in str(path).split("."):
+        if isinstance(current, dict):
+            current = current.get(part)
+
+        elif (
+            isinstance(current, list)
+            and part.isdigit()
+            and int(part) < len(current)
+        ):
+            current = current[int(part)]
+
+        else:
+            return None
+
+    return current
+
+
+def set_path(data, path, value):
+    """Nested JSON में दिए गए path पर value सेट करें।"""
+
+    parts = str(path).split(".")
+    current = data
+
+    for part in parts[:-1]:
+        if (
+            part not in current
+            or not isinstance(current[part], dict)
+        ):
+            current[part] = {}
+
+        current = current[part]
+
+    current[parts[-1]] = value
+
+
+def collect_text(value, output):
+    """JSON में मौजूद text को amenity matching के लिए इकट्ठा करें।"""
+
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(item, (dict, list)):
+                collect_text(item, output)
+
+            elif isinstance(item, (str, int, float)):
+                if not re.search(
+                    r"url|image|photo|phone|mobile|email|contact",
+                    str(key),
+                    re.IGNORECASE,
+                ):
+                    output.append(str(item))
+
+    elif isinstance(value, list):
+        for item in value:
+            collect_text(item, output)
+
+    elif isinstance(value, str):
+        output.append(value)
+
+
+def find_amenities(source):
+    """Keyword matching से amenities पहचानें।"""
+
+    text_parts = []
+    collect_text(source, text_parts)
+
+    searchable_text = " ".join(text_parts).lower()
+    found = []
+
+    for amenity, patterns in AMENITY_PATTERNS.items():
+        for pattern in patterns:
+            if re.search(pattern, searchable_text, re.IGNORECASE):
+                found.append(amenity)
+                break
+
+    # Source JSON में पहले से मौजूद amenities भी शामिल करें।
+    for key in (
+        "amenities",
+        "features",
+        "facilities",
+        "property_amenities",
+    ):
+        existing = source.get(key)
+
+        if isinstance(existing, list):
+            for item in existing:
+                if isinstance(item, str) and item.strip():
+                    found.append(item.strip())
+
+                elif isinstance(item, dict):
+                    name = (
+                        item.get("name")
+                        or item.get("title")
+                        or item.get("label")
+                    )
+
+                    if name:
+                        found.append(str(name).strip())
+
+        elif isinstance(existing, str):
+            found.extend(
+                item.strip()
+                for item in re.split(r"[,;|]", existing)
+                if item.strip()
+            )
+
+    # Duplicate amenities हटाएँ।
+    unique = []
+    seen = set()
+
+    for item in found:
+        normalized = item.casefold()
+
+        if normalized not in seen:
+            seen.add(normalized)
+            unique.append(item)
+
+    return unique
+
+
+def transform_listing(source, schema_config=None):
+    """Source listing को target JSON में बदलें।"""
+
+    if not isinstance(source, dict):
+        raise ValueError("Listing JSON object होना चाहिए।")
+
+    amenities = find_amenities(source)
+
+    if not schema_config:
+        output = dict(source)
+        output["amenities"] = amenities
+        return output
+
+    template = schema_config.get("template", {})
+
+    if not isinstance(template, dict):
+        raise ValueError("Schema template JSON object होना चाहिए।")
+
+    output = json.loads(
+        json.dumps(template, ensure_ascii=False)
+    )
+
+    field_map = schema_config.get("field_map", {})
+
+    if not isinstance(field_map, dict):
+        raise ValueError("field_map JSON object होना चाहिए।")
+
+    for target_path, source_path in field_map.items():
+        value = get_path(source, source_path)
+
+        if value is not None:
+            set_path(output, target_path, value)
+
+    amenities_target = schema_config.get(
+        "amenities_target",
+        "amenities",
+    )
+
+    set_path(output, amenities_target, amenities)
+
+    return output
