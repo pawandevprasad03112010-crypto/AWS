@@ -202,8 +202,6 @@ NEGATION_PATTERNS = [
     r"\bnot included\b", r"\bnot offered\b", r"\babsent\b",
     r"\bunder construction\b", r"\bproposed\b", r"\bcoming soon\b",
 ]
-
-
 def extract_listings(data):
     if isinstance(data, list):
         result = [x for x in data if isinstance(x, dict)]
@@ -297,7 +295,7 @@ def find_amenities(source):
             found.extend(x.strip() for x in re.split(r"[,;|]", value) if x.strip())
         elif isinstance(value, dict):
             for key, val in value.items():
-                                if val is True:
+                if val is True:
                     found.append(str(key).replace("_", " ").strip())
                 elif isinstance(val, (str, list, dict)):
                     add_explicit(val)
@@ -315,9 +313,7 @@ def find_amenities(source):
         matched = False
         for pattern in patterns:
             for match in re.finditer(pattern, searchable, re.I):
-                if not _has_nearby_negation(
-                    searchable, match.start(), match.end()
-                ):
+                if not _has_nearby_negation(searchable, match.start(), match.end()):
                     matched = True
                     break
             if matched:
@@ -336,7 +332,7 @@ def find_amenities(source):
 
 
 def _first_value(source, paths, default=None):
-    """Return the first present, non-empty value from dotted paths."""
+    """Return the first present, non-empty value from a list of dotted paths."""
     for path in paths:
         value = get_path(source, path)
         if value is not None and value != "":
@@ -345,16 +341,14 @@ def _first_value(source, paths, default=None):
 
 
 def _number(value):
-    """Convert numeric-looking values to numbers."""
+    """Convert numeric-looking values to numbers without inventing missing values."""
     if value is None or value == "":
         return None
     if isinstance(value, bool):
         return int(value)
     if isinstance(value, (int, float)):
         return value
-    cleaned = re.sub(
-        r"[^0-9.\-]", "", str(value).replace(",", "")
-    )
+    cleaned = re.sub(r"[^0-9.\-]", "", str(value).replace(",", ""))
     try:
         number = float(cleaned)
         return int(number) if number.is_integer() else number
@@ -363,20 +357,18 @@ def _number(value):
 
 
 def _as_text(value, default=""):
-    if value is None or isinstance(value, (dict, list)):
+    if value is None:
+        return default
+    if isinstance(value, (dict, list)):
         return default
     return str(value)
 
 
 def _image_urls(source):
-    """Collect URLs from known image/media fields."""
+    """Collect URLs only from known image/media fields, not arbitrary website URLs."""
     result = []
     media = source.get("media") if isinstance(source.get("media"), dict) else {}
-    candidate_keys = (
-        "main_image", "image_url", "photo_url", "thumbnail_url",
-        "image", "images", "photos", "pictures", "gallery",
-        "prop_images"
-    )
+    candidate_keys = ("main_image", "image_url", "photo_url", "thumbnail_url", "image", "images", "photos", "pictures", "gallery", "prop_images")
 
     def add(value):
         if isinstance(value, str):
@@ -384,11 +376,7 @@ def _image_urls(source):
             if url.startswith(("https://", "http://")) and url not in result:
                 result.append(url)
         elif isinstance(value, dict):
-            for key in (
-                "url", "src", "image_url", "original_url",
-                "large_url", "full_url", "thumbnail_url",
-                "photo_url", "cdn_url"
-            ):
+            for key in ("url", "src", "image_url", "original_url", "large_url", "full_url", "thumbnail_url", "photo_url", "cdn_url"):
                 if key in value:
                     add(value[key])
         elif isinstance(value, list):
@@ -398,24 +386,24 @@ def _image_urls(source):
     for key in candidate_keys:
         if key in media:
             add(media[key])
-
-    for parent in (
-        source,
-        source.get("property", {}),
-        source.get("entity", {}),
-        source.get("listing", {}),
-    ):
+    # Some scrapers place image collections at the root or under property/entity.
+    for parent in (source, source.get("property", {}), source.get("entity", {}), source.get("listing", {})):
         if isinstance(parent, dict):
             for key in candidate_keys:
                 if key in parent:
                     add(parent[key])
-
     return result
-    def transform_listing(source, schema_config=None):
-    """Transform one listing into the configured template."""
+
+
+def transform_listing(source, schema_config=None):
+    """Convert one 99acres-style listing to the supplied JS1 template.
+
+    When no schema is uploaded, preserve the original listing and replace its
+    amenities with deterministic keyword matches. When a schema is supplied,
+    start from its template, populate known fields, then apply custom field_map.
+    """
     if not isinstance(source, dict):
         raise ValueError("Listing record JSON object नहीं है।")
-
     amenities = find_amenities(source)
 
     if not schema_config:
@@ -428,200 +416,89 @@ def _image_urls(source):
     import copy
     output = copy.deepcopy(schema_config["template"])
 
-    title = _first_value(
-        source, ["entity.title", "listing.title", "title"]
-    )
-    description = _first_value(
-        source,
-        ["entity.description", "listing.description", "description"]
-    )
-
-    for target, value in (
-        ("entity.title", title),
-        ("listing.title", title),
-        ("entity.description", description),
-        ("listing.description", description),
-    ):
+    # Text and listing metadata
+    title = _first_value(source, ["entity.title", "listing.title", "title"])
+    description = _first_value(source, ["entity.description", "listing.description", "description"])
+    for target, value in (("entity.title", title), ("listing.title", title),
+                          ("entity.description", description), ("listing.description", description)):
         if value is not None:
             set_path(output, target, value)
-
-    registered = _first_value(
-        source,
-        ["availability.registered_display", "listing.registered_display"]
-    )
+    registered = _first_value(source, ["availability.registered_display", "listing.registered_display"])
     if registered is not None:
         set_path(output, "listing.registered_display", registered)
-
     market = _first_value(source, ["listing.market", "market"])
     if market is not None:
         set_path(output, "listing.market", market)
 
-    price_text = _first_value(source, [
-        "pricing.display_price",
-        "pricing.localized_price_text",
-        "localized_price_text",
-        "localized_price",
-        "pricing.price",
-        "price",
-    ])
-    price_words = _first_value(
-        source, ["pricing.price_in_words", "price_in_words"]
-    )
-
+    # Price fields: keep formatted strings separate from numeric amounts.
+    price_text = _first_value(source, ["pricing.display_price", "pricing.localized_price_text", "localized_price_text", "localized_price", "pricing.price", "price"])
+    price_words = _first_value(source, ["pricing.price_in_words", "price_in_words"])
     if price_text is not None:
         set_path(output, "pricing.display_price", _as_text(price_text))
     if price_words is not None:
         set_path(output, "pricing.price_in_words", _as_text(price_words))
-
-    price_per_area = _first_value(source, [
-        "pricing.price_per_unit_area",
-        "pricing.localized_price_sqft_text",
-        "localized_price_sqft_text",
-    ])
+    price_per_area = _first_value(source, ["pricing.price_per_unit_area", "pricing.localized_price_sqft_text", "localized_price_sqft_text"])
     if price_per_area is not None:
-        set_path(
-            output, "pricing.price_per_unit_area",
-            _as_text(price_per_area)
-        )
-
-    price_sqft = _first_value(source, [
-        "pricing.price_sqft",
-        "pricing.localized_price_sqft",
-        "localized_price_sqft",
-    ])
+        set_path(output, "pricing.price_per_unit_area", _as_text(price_per_area))
+    price_sqft = _first_value(source, ["pricing.price_sqft", "pricing.localized_price_sqft", "localized_price_sqft"])
     if price_sqft is not None:
         set_path(output, "pricing.price_sqft", _number(price_sqft))
-
     for target, paths in {
-        "pricing.min_price": [
-            "pricing.min_price", "pricing.min_price_value", "min_price"
-        ],
-        "pricing.max_price": [
-            "pricing.max_price", "pricing.max_price_value", "max_price"
-        ],
-        "pricing.average_price": [
-            "pricing.average_price",
-            "pricing.average_price_value",
-            "average_price",
-        ],
+        "pricing.min_price": ["pricing.min_price", "pricing.min_price_value", "min_price"],
+        "pricing.max_price": ["pricing.max_price", "pricing.max_price_value", "max_price"],
+        "pricing.average_price": ["pricing.average_price", "pricing.average_price_value", "average_price"],
         "pricing.brokerage": ["pricing.brokerage", "brokerage"],
     }.items():
         value = _first_value(source, paths)
         if value is not None:
-            parsed = (
-                _number(value)
-                if target != "pricing.brokerage"
-                else value
-            )
+            parsed = _number(value) if target != "pricing.brokerage" else value
             if parsed is not None:
                 set_path(output, target, parsed)
 
+    # Property details
     property_paths = {
         "property.bedrooms": ["property.bedrooms", "bedrooms"],
         "property.bathrooms": ["property.bathrooms", "bathrooms"],
         "property.balconies": ["property.balconies", "balconies"],
-        "property.furnishing": [
-            "property.furnishing",
-            "property.furnishing_label",
-            "furnishing",
-        ],
-        "property.floor_number": [
-            "property.floor_number", "property.floor", "floor_number"
-        ],
-        "property.floor_numbers": [
-            "property.floor_numbers", "floor_numbers"
-        ],
-        "property.total_floors": [
-            "property.total_floors", "total_floors"
-        ],
-        "property.ownership_type": [
-            "property.ownership_label",
-            "property.ownership_type",
-            "ownership_type",
-        ],
-        "property.property_age": [
-            "property.property_age",
-            "property.age",
-            "property.age_label",
-            "property.age_code",
-        ],
-        "property.area.display_area": [
-            "property.area.display_area", "localized_area"
-        ],
-        "property.area.secondary_area": [
-            "property.area.secondary_area",
-            "localized_secondary_area",
-        ],
-        "property.area.carpet_area": [
-            "property.area.carpet_area",
-            "property.area.carpet_sqft",
-            "localized_carpet_area",
-            "localized_area_value",
-        ],
+        "property.furnishing": ["property.furnishing", "property.furnishing_label", "furnishing"],
+        "property.floor_number": ["property.floor_number", "property.floor", "floor_number"],
+        "property.floor_numbers": ["property.floor_numbers", "floor_numbers"],
+        "property.total_floors": ["property.total_floors", "total_floors"],
+        "property.ownership_type": ["property.ownership_label", "property.ownership_type", "ownership_type"],
+        "property.property_age": ["property.property_age", "property.age", "property.age_label", "property.age_code"],
+        "property.area.display_area": ["property.area.display_area", "localized_area"],
+        "property.area.secondary_area": ["property.area.secondary_area", "localized_secondary_area"],
+        "property.area.carpet_area": ["property.area.carpet_area", "property.area.carpet_sqft", "localized_carpet_area", "localized_area_value"],
     }
-
     for target, paths in property_paths.items():
         value = _first_value(source, paths)
         if value is not None:
-            if target.endswith((
-                "bedrooms", "bathrooms", "balconies",
-                "total_floors", "carpet_area"
-            )):
+            if target.endswith(("bedrooms", "bathrooms", "balconies", "total_floors", "carpet_area")):
                 value = _number(value)
             if value is not None:
                 set_path(output, target, value)
-
-    floor_numbers = _first_value(
-        source, ["property.floor_numbers", "floor_numbers"]
-    )
+    floor_numbers = _first_value(source, ["property.floor_numbers", "floor_numbers"])
     if isinstance(floor_numbers, list):
         set_path(output, "property.floor_numbers", floor_numbers)
     elif floor_numbers is None:
-        floor = _number(
-            _first_value(source, ["property.floor_number", "floor_number"])
-        )
+        floor = _number(_first_value(source, ["property.floor_number", "floor_number"]))
         if floor is not None:
             set_path(output, "property.floor_numbers", [floor])
-
-    parking = _first_value(source, [
-        "property.reserved_parking.covered",
-        "property.reserved_parking.c",
-        "property.covered_parking",
-    ])
+    parking = _first_value(source, ["property.reserved_parking.covered", "property.reserved_parking.c", "property.covered_parking"])
     if parking is not None:
-        set_path(
-            output, "property.reserved_parking.covered",
-            _number(parking) or 0
-        )
-
+        set_path(output, "property.reserved_parking.covered", _number(parking) or 0)
+    # Location and coordinates
     for target, paths in {
         "location.city": ["location.city", "city"],
         "location.locality": ["location.locality", "locality"],
-        "location.locality_without_city": [
-            "location.locality_without_city"
-        ],
+        "location.locality_without_city": ["location.locality_without_city"],
         "location.locality_name": ["location.locality_name"],
-        "location.building_name": [
-            "location.building_name",
-            "relationships.project.building_name",
-        ],
-        "location.society_name": [
-            "location.society_name",
-            "relationships.project.project_name",
-            "relationships.project.building_name",
-        ],
-        "location.coordinates.latitude": [
-            "location.coordinates.latitude", "coordinates.latitude"
-        ],
-        "location.coordinates.longitude": [
-            "location.coordinates.longitude", "coordinates.longitude"
-        ],
-        "location.coordinates.zoom_level": [
-            "location.coordinates.zoom_level"
-        ],
-        "location.coordinates.source": [
-            "location.coordinates.source"
-        ],
+        "location.building_name": ["location.building_name", "relationships.project.building_name"],
+        "location.society_name": ["location.society_name", "relationships.project.project_name", "relationships.project.building_name"],
+        "location.coordinates.latitude": ["location.coordinates.latitude", "coordinates.latitude"],
+        "location.coordinates.longitude": ["location.coordinates.longitude", "coordinates.longitude"],
+        "location.coordinates.zoom_level": ["location.coordinates.zoom_level"],
+        "location.coordinates.source": ["location.coordinates.source"],
         "location.landmarks": ["location.landmarks"],
     }.items():
         value = _first_value(source, paths)
@@ -630,477 +507,80 @@ def _image_urls(source):
                 value = _number(value)
             set_path(output, target, value)
 
+    # Images: only image-specific fields are copied into media.images.
     images = _image_urls(source)
     if images:
         set_path(output, "media.images", images)
 
+    # Contact details, with no attempt to infer missing phone numbers.
     for target, paths in {
-        "contact_details.contact_name": [
-            "contact_details.contact_name",
-            "contact_details.profile.contact_name",
-        ],
-        "contact_details.company_name": [
-            "contact_details.company_name",
-            "contact_details.profile.contact_company_name",
-        ],
-        "contact_details.phone_number": [
-            "contact_details.phone_number",
-            "contact_details.mobile",
-            "contact_details.phone",
-        ],
-        "contact_details.dealer_photo_url": [
-            "contact_details.dealer_photo_url",
-            "contact_details.profile.photo_url",
-        ],
-        "contact_details.class_label": [
-            "contact_details.class_label",
-            "contact_details.profile.class_label",
-        ],
-        "contact_details.profile.contact_name": [
-            "contact_details.profile.contact_name",
-            "contact_details.contact_name",
-        ],
-        "contact_details.profile.contact_company_name": [
-            "contact_details.profile.contact_company_name",
-            "contact_details.company_name",
-        ],
-        "contact_details.profile.phone_number": [
-            "contact_details.profile.phone_number",
-            "contact_details.phone_number",
-        ],
-        "contact_details.profile.photo_url": [
-            "contact_details.profile.photo_url",
-            "contact_details.dealer_photo_url",
-        ],
-        "contact_details.profile.super.contact_company_name": [
-            "contact_details.profile.super.contact_company_name",
-            "contact_details.company_name",
-        ],
-        "contact_details.profile.super.photo_url": [
-            "contact_details.profile.super.photo_url",
-            "contact_details.dealer_photo_url",
-        ],
+        "contact_details.contact_name": ["contact_details.contact_name", "contact_details.profile.contact_name"],
+        "contact_details.company_name": ["contact_details.company_name", "contact_details.profile.contact_company_name"],
+        "contact_details.phone_number": ["contact_details.phone_number", "contact_details.mobile", "contact_details.phone"],
+        "contact_details.dealer_photo_url": ["contact_details.dealer_photo_url", "contact_details.profile.photo_url"],
+        "contact_details.class_label": ["contact_details.class_label", "contact_details.profile.class_label"],
+        "contact_details.profile.contact_name": ["contact_details.profile.contact_name", "contact_details.contact_name"],
+        "contact_details.profile.contact_company_name": ["contact_details.profile.contact_company_name", "contact_details.company_name"],
+        "contact_details.profile.phone_number": ["contact_details.profile.phone_number", "contact_details.phone_number"],
+        "contact_details.profile.photo_url": ["contact_details.profile.photo_url", "contact_details.dealer_photo_url"],
+        "contact_details.profile.super.contact_company_name": ["contact_details.profile.super.contact_company_name", "contact_details.company_name"],
+        "contact_details.profile.super.photo_url": ["contact_details.profile.super.photo_url", "contact_details.dealer_photo_url"],
     }.items():
         value = _first_value(source, paths)
         if value is not None:
             set_path(output, target, value)
 
+    # Compliance / RERA
     for target, paths in {
-        "attributes.compliance.registration_status": [
-            "attributes.compliance.registration_status",
-            "rera.registration_status",
-        ],
-        "attributes.compliance.rera_registration_id": [
-            "attributes.compliance.rera_registration_id",
-            "rera_registration_id",
-            "rera.rera_registration_id",
-        ],
-        "attributes.compliance.project_rera_registration_id": [
-            "attributes.compliance.project_rera_registration_id",
-            "project_rera_registration_id",
-            "relationships.project.rera_registration_id",
-        ],
-        "attributes.tags_and_signals.property_tags": [
-            "attributes.tags_and_signals.property_tags", "property_tags"
-        ],
-        "attributes.tags_and_signals.tags": [
-            "attributes.tags_and_signals.tags", "tags"
-        ],
-        "attributes.tags_and_signals.top_usps": [
-            "attributes.tags_and_signals.top_usps",
-            "top_usps",
-            "source_specific.top_usps",
-        ],
+        "attributes.compliance.registration_status": ["attributes.compliance.registration_status", "rera.registration_status"],
+        "attributes.compliance.rera_registration_id": ["attributes.compliance.rera_registration_id", "rera_registration_id", "rera.rera_registration_id"],
+        "attributes.compliance.project_rera_registration_id": ["attributes.compliance.project_rera_registration_id", "project_rera_registration_id", "relationships.project.rera_registration_id"],
+        "attributes.tags_and_signals.property_tags": ["attributes.tags_and_signals.property_tags", "property_tags"],
+        "attributes.tags_and_signals.tags": ["attributes.tags_and_signals.tags", "tags"],
+        "attributes.tags_and_signals.top_usps": ["attributes.tags_and_signals.top_usps", "top_usps", "source_specific.top_usps"],
     }.items():
         value = _first_value(source, paths)
         if value is not None:
             set_path(output, target, value)
 
-    set_path(
-        output, schema_config.get("amenities_target", "amenities"),
-        amenities
-    )
+    set_path(output, schema_config.get("amenities_target", "amenities"), amenities)
 
-    # Custom field mappings override built-in mappings.
+    # Explicit custom mappings override built-in mappings.
     for target_path, source_path in schema_config.get("field_map", {}).items():
         value = get_path(source, source_path)
         if value is not None:
             set_path(output, target_path, value)
-
     return output
-    def transform_listing(source, schema_config=None):
-    """Transform one listing into the configured template."""
-    if not isinstance(source, dict):
-        raise ValueError("Listing record JSON object नहीं है।")
 
-    amenities = find_amenities(source)
 
-    if not schema_config:
-        import copy
-        output = copy.deepcopy(source)
-        output["amenities"] = amenities
-        return output
-
-    validate_schema_config(schema_config)
-    import copy
-    output = copy.deepcopy(schema_config["template"])
-
-    title = _first_value(
-        source, ["entity.title", "listing.title", "title"]
-    )
-    description = _first_value(
-        source,
-        ["entity.description", "listing.description", "description"]
-    )
-
-    for target, value in (
-        ("entity.title", title),
-        ("listing.title", title),
-        ("entity.description", description),
-        ("listing.description", description),
-    ):
-        if value is not None:
-            set_path(output, target, value)
-
-    registered = _first_value(
-        source,
-        ["availability.registered_display", "listing.registered_display"]
-    )
-    if registered is not None:
-        set_path(output, "listing.registered_display", registered)
-
-    market = _first_value(source, ["listing.market", "market"])
-    if market is not None:
-        set_path(output, "listing.market", market)
-
-    price_text = _first_value(source, [
-        "pricing.display_price",
-        "pricing.localized_price_text",
-        "localized_price_text",
-        "localized_price",
-        "pricing.price",
-        "price",
-    ])
-    price_words = _first_value(
-        source, ["pricing.price_in_words", "price_in_words"]
-    )
-
-    if price_text is not None:
-        set_path(output, "pricing.display_price", _as_text(price_text))
-    if price_words is not None:
-        set_path(output, "pricing.price_in_words", _as_text(price_words))
-
-    price_per_area = _first_value(source, [
-        "pricing.price_per_unit_area",
-        "pricing.localized_price_sqft_text",
-        "localized_price_sqft_text",
-    ])
-    if price_per_area is not None:
-        set_path(
-            output, "pricing.price_per_unit_area",
-            _as_text(price_per_area)
-        )
-
-    price_sqft = _first_value(source, [
-        "pricing.price_sqft",
-        "pricing.localized_price_sqft",
-        "localized_price_sqft",
-    ])
-    if price_sqft is not None:
-        set_path(output, "pricing.price_sqft", _number(price_sqft))
-
-    for target, paths in {
-        "pricing.min_price": [
-            "pricing.min_price", "pricing.min_price_value", "min_price"
-        ],
-        "pricing.max_price": [
-            "pricing.max_price", "pricing.max_price_value", "max_price"
-        ],
-        "pricing.average_price": [
-            "pricing.average_price",
-            "pricing.average_price_value",
-            "average_price",
-        ],
-        "pricing.brokerage": ["pricing.brokerage", "brokerage"],
-    }.items():
-        value = _first_value(source, paths)
-        if value is not None:
-            parsed = (
-                _number(value)
-                if target != "pricing.brokerage"
-                else value
-            )
-            if parsed is not None:
-                set_path(output, target, parsed)
-
-    property_paths = {
-        "property.bedrooms": ["property.bedrooms", "bedrooms"],
-        "property.bathrooms": ["property.bathrooms", "bathrooms"],
-        "property.balconies": ["property.balconies", "balconies"],
-        "property.furnishing": [
-            "property.furnishing",
-            "property.furnishing_label",
-            "furnishing",
-        ],
-        "property.floor_number": [
-            "property.floor_number", "property.floor", "floor_number"
-        ],
-        "property.floor_numbers": [
-            "property.floor_numbers", "floor_numbers"
-        ],
-        "property.total_floors": [
-            "property.total_floors", "total_floors"
-        ],
-        "property.ownership_type": [
-            "property.ownership_label",
-            "property.ownership_type",
-            "ownership_type",
-        ],
-        "property.property_age": [
-            "property.property_age",
-            "property.age",
-            "property.age_label",
-            "property.age_code",
-        ],
-        "property.area.display_area": [
-            "property.area.display_area", "localized_area"
-        ],
-        "property.area.secondary_area": [
-            "property.area.secondary_area",
-            "localized_secondary_area",
-        ],
-        "property.area.carpet_area": [
-            "property.area.carpet_area",
-            "property.area.carpet_sqft",
-            "localized_carpet_area",
-            "localized_area_value",
-        ],
-    }
-
-    for target, paths in property_paths.items():
-        value = _first_value(source, paths)
-        if value is not None:
-            if target.endswith((
-                "bedrooms", "bathrooms", "balconies",
-                "total_floors", "carpet_area"
-            )):
-                value = _number(value)
-            if value is not None:
-                set_path(output, target, value)
-
-    floor_numbers = _first_value(
-        source, ["property.floor_numbers", "floor_numbers"]
-    )
-    if isinstance(floor_numbers, list):
-        set_path(output, "property.floor_numbers", floor_numbers)
-    elif floor_numbers is None:
-        floor = _number(
-            _first_value(source, ["property.floor_number", "floor_number"])
-        )
-        if floor is not None:
-            set_path(output, "property.floor_numbers", [floor])
-
-    parking = _first_value(source, [
-        "property.reserved_parking.covered",
-        "property.reserved_parking.c",
-        "property.covered_parking",
-    ])
-    if parking is not None:
-        set_path(
-            output, "property.reserved_parking.covered",
-            _number(parking) or 0
-        )
-
-    for target, paths in {
-        "location.city": ["location.city", "city"],
-        "location.locality": ["location.locality", "locality"],
-        "location.locality_without_city": [
-            "location.locality_without_city"
-        ],
-        "location.locality_name": ["location.locality_name"],
-        "location.building_name": [
-            "location.building_name",
-            "relationships.project.building_name",
-        ],
-        "location.society_name": [
-            "location.society_name",
-            "relationships.project.project_name",
-            "relationships.project.building_name",
-        ],
-        "location.coordinates.latitude": [
-            "location.coordinates.latitude", "coordinates.latitude"
-        ],
-        "location.coordinates.longitude": [
-            "location.coordinates.longitude", "coordinates.longitude"
-        ],
-        "location.coordinates.zoom_level": [
-            "location.coordinates.zoom_level"
-        ],
-        "location.coordinates.source": [
-            "location.coordinates.source"
-        ],
-        "location.landmarks": ["location.landmarks"],
-    }.items():
-        value = _first_value(source, paths)
-        if value is not None:
-            if target.endswith(("latitude", "longitude")):
-                value = _number(value)
-            set_path(output, target, value)
-
-    images = _image_urls(source)
-    if images:
-        set_path(output, "media.images", images)
-
-    for target, paths in {
-        "contact_details.contact_name": [
-            "contact_details.contact_name",
-            "contact_details.profile.contact_name",
-        ],
-        "contact_details.company_name": [
-            "contact_details.company_name",
-            "contact_details.profile.contact_company_name",
-        ],
-        "contact_details.phone_number": [
-            "contact_details.phone_number",
-            "contact_details.mobile",
-            "contact_details.phone",
-        ],
-        "contact_details.dealer_photo_url": [
-            "contact_details.dealer_photo_url",
-            "contact_details.profile.photo_url",
-        ],
-        "contact_details.class_label": [
-            "contact_details.class_label",
-            "contact_details.profile.class_label",
-        ],
-        "contact_details.profile.contact_name": [
-            "contact_details.profile.contact_name",
-            "contact_details.contact_name",
-        ],
-        "contact_details.profile.contact_company_name": [
-            "contact_details.profile.contact_company_name",
-            "contact_details.company_name",
-        ],
-        "contact_details.profile.phone_number": [
-            "contact_details.profile.phone_number",
-            "contact_details.phone_number",
-        ],
-        "contact_details.profile.photo_url": [
-            "contact_details.profile.photo_url",
-            "contact_details.dealer_photo_url",
-        ],
-        "contact_details.profile.super.contact_company_name": [
-            "contact_details.profile.super.contact_company_name",
-            "contact_details.company_name",
-        ],
-        "contact_details.profile.super.photo_url": [
-            "contact_details.profile.super.photo_url",
-            "contact_details.dealer_photo_url",
-        ],
-    }.items():
-        value = _first_value(source, paths)
-        if value is not None:
-            set_path(output, target, value)
-
-    for target, paths in {
-        "attributes.compliance.registration_status": [
-            "attributes.compliance.registration_status",
-            "rera.registration_status",
-        ],
-        "attributes.compliance.rera_registration_id": [
-            "attributes.compliance.rera_registration_id",
-            "rera_registration_id",
-            "rera.rera_registration_id",
-        ],
-        "attributes.compliance.project_rera_registration_id": [
-            "attributes.compliance.project_rera_registration_id",
-            "project_rera_registration_id",
-            "relationships.project.rera_registration_id",
-        ],
-        "attributes.tags_and_signals.property_tags": [
-            "attributes.tags_and_signals.property_tags", "property_tags"
-        ],
-        "attributes.tags_and_signals.tags": [
-            "attributes.tags_and_signals.tags", "tags"
-        ],
-        "attributes.tags_and_signals.top_usps": [
-            "attributes.tags_and_signals.top_usps",
-            "top_usps",
-            "source_specific.top_usps",
-        ],
-    }.items():
-        value = _first_value(source, paths)
-        if value is not None:
-            set_path(output, target, value)
-
-    set_path(
-        output, schema_config.get("amenities_target", "amenities"),
-        amenities
-    )
-
-    # Custom field mappings override built-in mappings.
-    for target_path, source_path in schema_config.get("field_map", {}).items():
-        value = get_path(source, source_path)
-        if value is not None:
-            set_path(output, target_path, value)
-
-    return output
 def find_image_urls(node):
-    """Find image URLs in common URL fields and image collections."""
+    """Find image URLs in common URL fields and bare URL strings under image collections."""
     found = []
     url_keys = {
         "url", "src", "image_url", "imageurl", "original_url",
         "large_url", "full_url", "thumbnail_url", "image_src",
-        "photo_url", "picture_url", "cdn_url",
+        "photo_url", "picture_url", "cdn_url"
     }
-    image_context_words = (
-        "image", "photo", "picture", "media",
-        "gallery", "thumbnail", "thumb"
-    )
+    image_context_words = ("image", "photo", "picture", "media", "gallery", "thumbnail", "thumb")
 
     def walk(value, key="", image_context=False):
         key_lower = str(key).lower()
-        current_image_context = image_context or any(
-            word in key_lower for word in image_context_words
-        )
-
+        current_image_context = image_context or any(word in key_lower for word in image_context_words)
         if isinstance(value, dict):
             for k, child in value.items():
                 child_key = str(k).lower()
-                is_url_field = (
-                    child_key in url_keys
-                    or child_key.endswith("_url")
-                    or child_key.endswith("url")
-                )
-                if (
-                    isinstance(child, str)
-                    and child.startswith(("http://", "https://"))
-                    and (
-                        is_url_field
-                        or current_image_context
-                        or any(word in child_key for word in image_context_words)
-                    )
-                ):
+                is_url_field = child_key in url_keys or child_key.endswith("_url") or child_key.endswith("url")
+                if isinstance(child, str) and child.startswith(("http://", "https://")) and (is_url_field or current_image_context or any(word in child_key for word in image_context_words)):
                     found.append(child)
                 else:
                     walk(child, k, current_image_context)
-
         elif isinstance(value, list):
             for child in value:
-                if (
-                    isinstance(child, str)
-                    and child.startswith(("http://", "https://"))
-                    and current_image_context
-                ):
+                if isinstance(child, str) and child.startswith(("http://", "https://")) and current_image_context:
                     found.append(child)
                 else:
                     walk(child, key, current_image_context)
-
-        elif (
-            isinstance(value, str)
-            and value.startswith(("http://", "https://"))
-            and current_image_context
-        ):
+        elif isinstance(value, str) and value.startswith(("http://", "https://")) and current_image_context:
             found.append(value)
 
     walk(node)
@@ -1111,11 +591,9 @@ def is_safe_public_url(url):
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         return False
-
     host = parsed.hostname.lower()
     if host == "localhost" or host.endswith(".local"):
         return False
-
     try:
         addresses = socket.getaddrinfo(host, None)
         for address in addresses:
@@ -1124,7 +602,6 @@ def is_safe_public_url(url):
                 return False
     except (socket.gaierror, ValueError):
         return False
-
     return True
 
 
@@ -1138,88 +615,45 @@ def replace_exact(node, old, new):
     elif isinstance(node, list):
         for item in node:
             replace_exact(item, old, new)
-def migrate_images(
-    listing,
-    s3_client,
-    bucket,
-    prefix="migrated-listings",
-    public_base_url=""
-):
-    warnings = []
 
+
+def migrate_images(listing, s3_client, bucket, prefix="migrated-listings", public_base_url=""):
+    warnings = []
     for image_url in find_image_urls(listing):
         try:
             if not is_safe_public_url(image_url):
-                warnings.append(
-                    f"सुरक्षा जाँच में URL skip किया गया: {image_url[:150]}"
-                )
+                warnings.append(f"सुरक्षा जाँच में URL skip किया गया: {image_url[:150]}")
                 continue
 
             response = requests.get(
-                image_url,
-                timeout=(10, 35),
-                stream=True,
-                headers={"User-Agent": "ListingMigrator/1.0"},
+                image_url, timeout=(10, 35), stream=True,
+                headers={"User-Agent": "ListingMigrator/1.0"}
             )
             response.raise_for_status()
-
-            content_type = (
-                response.headers.get("Content-Type", "")
-                .split(";")[0].strip().lower()
-            )
-
+            content_type = response.headers.get("Content-Type", "").split(";")[0].strip().lower()
             if not content_type.startswith("image/"):
                 response.close()
-                warnings.append(
-                    f"URL से image content नहीं मिला: {image_url[:150]}"
-                )
+                warnings.append(f"URL से image content नहीं मिला: {image_url[:150]}")
                 continue
-
             body = response.content
             response.close()
-
             if not body or len(body) > 20 * 1024 * 1024:
-                warnings.append(
-                    f"खाली या 20 MB से बड़ी image skip हुई: {image_url[:150]}"
-                )
+                warnings.append(f"खाली या 20 MB से बड़ी image skip हुई: {image_url[:150]}")
                 continue
 
-            extension = (
-                mimetypes.guess_extension(content_type)
-                or os.path.splitext(urlparse(image_url).path)[1]
-                or ".img"
-            )
-            digest = hashlib.sha256(
-                image_url.encode("utf-8")
-            ).hexdigest()[:20]
+            extension = mimetypes.guess_extension(content_type) or os.path.splitext(urlparse(image_url).path)[1] or ".img"
+            digest = hashlib.sha256(image_url.encode("utf-8")).hexdigest()[:20]
             key = f"{prefix.strip('/')}/{digest}{extension}"
-
             s3_client.put_object(
-                Bucket=bucket,
-                Key=key,
-                Body=body,
-                ContentType=content_type,
-                Metadata={
-                    "source-url-sha256": hashlib.sha256(
-                        image_url.encode("utf-8")
-                    ).hexdigest()
-                },
+                Bucket=bucket, Key=key, Body=body, ContentType=content_type,
+                Metadata={"source-url-sha256": hashlib.sha256(image_url.encode("utf-8")).hexdigest()}
             )
-
             if public_base_url:
                 new_url = f"{public_base_url}/{key}"
             else:
                 region = os.environ.get("AWS_REGION", "ap-south-1")
-                new_url = (
-                    f"https://{bucket}.s3.{region}.amazonaws.com/{key}"
-                )
-
+                new_url = f"https://{bucket}.s3.{region}.amazonaws.com/{key}"
             replace_exact(listing, image_url, new_url)
-
         except Exception as exc:
-            warnings.append(
-                f"Image migrate नहीं हुई ({image_url[:100]}): "
-                f"{str(exc)[:160]}"
-            )
-
+            warnings.append(f"Image migrate नहीं हुई ({image_url[:100]}): {str(exc)[:160]}")
     return listing, warnings
