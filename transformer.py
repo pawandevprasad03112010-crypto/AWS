@@ -1045,3 +1045,181 @@ def _image_urls(source):
             set_path(output, target_path, value)
 
     return output
+def find_image_urls(node):
+    """Find image URLs in common URL fields and image collections."""
+    found = []
+    url_keys = {
+        "url", "src", "image_url", "imageurl", "original_url",
+        "large_url", "full_url", "thumbnail_url", "image_src",
+        "photo_url", "picture_url", "cdn_url",
+    }
+    image_context_words = (
+        "image", "photo", "picture", "media",
+        "gallery", "thumbnail", "thumb"
+    )
+
+    def walk(value, key="", image_context=False):
+        key_lower = str(key).lower()
+        current_image_context = image_context or any(
+            word in key_lower for word in image_context_words
+        )
+
+        if isinstance(value, dict):
+            for k, child in value.items():
+                child_key = str(k).lower()
+                is_url_field = (
+                    child_key in url_keys
+                    or child_key.endswith("_url")
+                    or child_key.endswith("url")
+                )
+                if (
+                    isinstance(child, str)
+                    and child.startswith(("http://", "https://"))
+                    and (
+                        is_url_field
+                        or current_image_context
+                        or any(word in child_key for word in image_context_words)
+                    )
+                ):
+                    found.append(child)
+                else:
+                    walk(child, k, current_image_context)
+
+        elif isinstance(value, list):
+            for child in value:
+                if (
+                    isinstance(child, str)
+                    and child.startswith(("http://", "https://"))
+                    and current_image_context
+                ):
+                    found.append(child)
+                else:
+                    walk(child, key, current_image_context)
+
+        elif (
+            isinstance(value, str)
+            and value.startswith(("http://", "https://"))
+            and current_image_context
+        ):
+            found.append(value)
+
+    walk(node)
+    return list(dict.fromkeys(found))
+
+
+def is_safe_public_url(url):
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return False
+
+    host = parsed.hostname.lower()
+    if host == "localhost" or host.endswith(".local"):
+        return False
+
+    try:
+        addresses = socket.getaddrinfo(host, None)
+        for address in addresses:
+            ip = ipaddress.ip_address(address[4][0])
+            if not ip.is_global:
+                return False
+    except (socket.gaierror, ValueError):
+        return False
+
+    return True
+
+
+def replace_exact(node, old, new):
+    if isinstance(node, dict):
+        for key, value in list(node.items()):
+            if isinstance(value, str) and value == old:
+                node[key] = new
+            else:
+                replace_exact(value, old, new)
+    elif isinstance(node, list):
+        for item in node:
+            replace_exact(item, old, new)
+def migrate_images(
+    listing,
+    s3_client,
+    bucket,
+    prefix="migrated-listings",
+    public_base_url=""
+):
+    warnings = []
+
+    for image_url in find_image_urls(listing):
+        try:
+            if not is_safe_public_url(image_url):
+                warnings.append(
+                    f"सुरक्षा जाँच में URL skip किया गया: {image_url[:150]}"
+                )
+                continue
+
+            response = requests.get(
+                image_url,
+                timeout=(10, 35),
+                stream=True,
+                headers={"User-Agent": "ListingMigrator/1.0"},
+            )
+            response.raise_for_status()
+
+            content_type = (
+                response.headers.get("Content-Type", "")
+                .split(";")[0].strip().lower()
+            )
+
+            if not content_type.startswith("image/"):
+                response.close()
+                warnings.append(
+                    f"URL से image content नहीं मिला: {image_url[:150]}"
+                )
+                continue
+
+            body = response.content
+            response.close()
+
+            if not body or len(body) > 20 * 1024 * 1024:
+                warnings.append(
+                    f"खाली या 20 MB से बड़ी image skip हुई: {image_url[:150]}"
+                )
+                continue
+
+            extension = (
+                mimetypes.guess_extension(content_type)
+                or os.path.splitext(urlparse(image_url).path)[1]
+                or ".img"
+            )
+            digest = hashlib.sha256(
+                image_url.encode("utf-8")
+            ).hexdigest()[:20]
+            key = f"{prefix.strip('/')}/{digest}{extension}"
+
+            s3_client.put_object(
+                Bucket=bucket,
+                Key=key,
+                Body=body,
+                ContentType=content_type,
+                Metadata={
+                    "source-url-sha256": hashlib.sha256(
+                        image_url.encode("utf-8")
+                    ).hexdigest()
+                },
+            )
+
+            if public_base_url:
+                new_url = f"{public_base_url}/{key}"
+            else:
+                region = os.environ.get("AWS_REGION", "ap-south-1")
+                new_url = (
+                    f"https://{bucket}.s3.{region}.amazonaws.com/{key}"
+                )
+
+            replace_exact(listing, image_url, new_url)
+
+        except Exception as exc:
+            warnings.append(
+                f"Image migrate नहीं हुई ({image_url[:100]}): "
+                f"{str(exc)[:160]}"
+            )
+
+    return listing, warnings
