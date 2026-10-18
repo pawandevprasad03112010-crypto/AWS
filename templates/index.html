@@ -1,0 +1,179 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Real Estate Listing Migrator</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 24px 14px;
+      font-family: Arial, sans-serif;
+      background: #f3f5f9;
+      color: #202938;
+    }
+
+    .container {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 24px;
+      background: #fff;
+      border-radius: 14px;
+      box-shadow: 0 4px 18px rgba(0, 0, 0, 0.07);
+    }
+
+    h1 {
+      margin-top: 0;
+      font-size: 27px;
+    }
+
+    p {
+      line-height: 1.6;
+      color: #526071;
+    }
+
+    label {
+      display: block;
+      margin: 18px 0 8px;
+      font-weight: bold;
+    }
+
+    input[type="file"] {
+      display: block;
+      width: 100%;
+      padding: 12px;
+      border: 1px solid #ccd3dd;
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .option {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      margin-top: 18px;
+      font-weight: normal;
+    }
+
+    .option input {
+      margin-top: 4px;
+    }
+
+    button {
+      width: 100%;
+      margin-top: 24px;
+      padding: 14px;
+      border: 0;
+      border-radius: 8px;
+      background: #175cd3;
+      color: #fff;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: 0.65;
+      cursor: wait;
+    }
+
+    .note {
+      margin-top: 18px;
+      padding: 12px;
+      background: #fff7e6;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+
+    #status {
+      margin-top: 16px;
+      overflow-wrap: anywhere;
+    }
+
+    @media (max-width: 480px) {
+      .container {
+        padding: 18px;
+      }
+
+      h1 {
+        font-size: 23px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <h1>Real Estate Listing Migrator</h1>
+
+    <p>
+      Upload one or more source JSON files. The app will
+      process listings and provide a ZIP download.
+    </p>
+
+    <form id="uploadForm" action="/process" method="POST"
+          enctype="multipart/form-data">
+
+      <label for="source_json">Source JSON files (required)</label>
+      <input
+        id="source_json"
+        type="file"
+        name="source_json"
+        accept=".json,application/json"
+        multiple
+        required
+      >
+
+      <label for="schema_json">
+        Target schema configuration (optional)
+      </label>
+      <input
+        id="schema_json"
+        type="file"
+        name="schema_json"
+        accept=".json,application/json"
+      >
+
+      <label class="option">
+        <input
+          type="checkbox"
+          name="migrate_to_s3"
+          value="yes"
+        >
+        <span>
+          Migrate image URLs to AWS S3. Select this only after
+          AWS credentials and bucket permissions are configured.
+        </span>
+      </label>
+
+      <button id="submitButton" type="submit">
+        Process JSON Files
+      </button>
+    </form>
+
+    <div class="note">
+      <strong>Note:</strong>
+      Verify the target schema before processing important data.
+      S3 image migration requires valid AWS configuration.
+    </div>
+
+    <p id="status" role="status" aria-live="polite"></p>
+  </main>
+
+  <script>
+    const form = document.getElementById("uploadForm");
+    const button = document.getElementById("submitButton");
+    const status = document.getElementById("status");
+
+    form.addEventListener("submit", function () {
+      button.disabled = true;
+      button.textContent = "Processing...";
+      status.textContent = "Your files are being processed. Please wait.";
+    });
+  </script>
+</body>
+</html>
